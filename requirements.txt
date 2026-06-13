@@ -8,3 +8,5 @@ ipywidgets>=8.0.0
 notebook>=7.0.0
 statsmodels>=0.14.0
 jinja2
+pydantic-ai>=1.0.0
+

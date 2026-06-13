@@ -1,14 +1,14 @@
 # AI-Powered Sales Forecasting Agent
 
-This repository implements a production-quality AI-Powered Sales Forecasting Agent that runs inside Jupyter notebooks. The agent interfaces with a local `vLLM` server hosting `Qwen/Qwen3-30B-Instruct` (using the OpenAI SDK) and calls local Python analytics tools (Prophet, Isolation Forest, log-log OLS regressions) to answer business queries.
+This repository implements a production-quality AI-Powered Sales Forecasting Agent that runs inside Jupyter notebooks. The agent interfaces with a local `vLLM` server hosting `Qwen/Qwen3-4B` using the `Pydantic AI` framework and calls local Python analytics tools (Prophet, Isolation Forest, log-log OLS regressions) to answer business queries.
 
 ## Key Features
+- **Pydantic AI Agent**: Uses Pydantic AI for clean model configuration, automatic tool schemas generation from signatures/docstrings, and robust message history management.
 - **Prophet Forecasting Engine**: Automated time-series forecasting with trend, seasonality, and confidence boundaries.
 - **Price Elasticity Estimation**: Log-log linear regression model (`log(sales) ~ log(price)`) to calculate demand sensitivity.
 - **Forecast Driver Analysis**: Linear regression OLS decomposition to attribute sales to trend, pricing, promotions, and holidays.
 - **Anomaly Detection**: Scikit-Learn `IsolationForest` scans for statistical outliers in weekly sales volume.
 - **Inventory Recommendation Engine**: Stock adjustment suggestions based on forecasted Weeks of Supply (WOS).
-- **Conversational Agent Loop**: Native OpenAI function calling support (via vLLM) with multi-step capability.
 - **Offline Heuristic Mode**: If the local LLM server is offline, the agent runs a rule-based parser that executes tools directly in the notebook, preventing code crashes.
 
 ## Directory Structure
@@ -20,9 +20,9 @@ sales-forecast-agent/
 │   └── Sales_Forecasting_Agent.ipynb  # Interactive workspace and agent console
 ├── src/
 │   ├── agent/
-│   │   ├── agent.py               # Conversational OpenAI client loop and fallbacks
+│   │   ├── agent.py               # Conversational Pydantic AI agent loop and fallbacks
 │   │   ├── prompts.py             # Agent system prompt
-│   │   └── tool_registry.py       # OpenAI JSON schemas and routing logic
+│   │   └── tool_registry.py       # Local routing mapping helper
 │   ├── forecasting/
 │   │   └── prophet_model.py       # Meta Prophet forecasting model (with Holt-Winters fallback)
 │   ├── tools/
@@ -57,13 +57,19 @@ python -m src.data.data_generator
 ```
 
 ### 2. Run the local vLLM Server
-Launch the local vLLM server pointing to the Qwen3 model (configure your parameters depending on GPU availability):
+Launch the local vLLM server pointing to the Qwen3-4B model with tools enabled:
 ```bash
-vllm serve Qwen/Qwen3-30B-Instruct \
-  --enable-auto-tool-choice \
-  --tool-call-parser qwen3_coder
+VLLM_USE_TRITON_FLASH_ATTN=0 \
+vllm serve Qwen/Qwen3-4B \
+    --served-model-name Qwen3-4B \
+    --api-key abc-123 \
+    --port 8000 \
+    --enable-auto-tool-choice \
+    --tool-call-parser hermes \
+    --trust-remote-code \
+    --max_model_len 24272
 ```
-*Note:* The agent connects to `http://localhost:8000/v1` by default.
+*Note:* The agent connects to `http://localhost:8000/v1` with the authorization header bearer key `abc-123`.
 
 ### 3. Start the Jupyter Notebook
 Run the notebook interface:
@@ -78,7 +84,7 @@ Execute the notebook cells to ask questions:
 agent.ask("Forecast Product_3 sales for next 12 weeks")
 
 # Promotional impact
-agent.ask("What is the impact of promotions for Product_3?")
+agent.ask("What was the impact of promotions for Product_3?")
 
 # Inventory recommendation
 agent.ask("Which products need inventory replenishment?")

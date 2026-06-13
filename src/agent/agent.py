@@ -2,11 +2,17 @@ import os
 import re
 import json
 import logging
-from typing import List, Dict, Any
-from openai import OpenAI
+from typing import List, Dict, Any, Optional
+
+from pydantic_ai import Agent
+try:
+    from pydantic_ai.models.openai import OpenAIChatModel as OpenAIModel
+except ImportError:
+    from pydantic_ai.models.openai import OpenAIModel
+from pydantic_ai.providers.openai import OpenAIProvider
 
 from src.agent.prompts import SYSTEM_PROMPT
-from src.agent.tool_registry import TOOL_SCHEMAS, execute_tool
+from src.agent.tool_registry import execute_tool
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -14,37 +20,71 @@ logger = logging.getLogger(__name__)
 
 class SalesForecastAgent:
     """
-    An AI Sales Forecasting Agent that interacts with Qwen3 via a vLLM API endpoint.
-    Maintains memory of conversations and executes multi-step tool calls natively.
-    Includes a rule-based fallback if the vLLM server is offline.
+    An AI Sales Forecasting Agent that interacts with Qwen3 via pydantic_ai
+    and a local vLLM API endpoint. Maintains memory of conversations and
+    executes tool calls. Includes a rule-based fallback if the vLLM server is offline.
     """
     def __init__(
         self,
-        base_url: str = "http://localhost:8000/v1",
-        api_key: str = "none",
-        model: str = "Qwen/Qwen3-30B-Instruct"
+        base_url: str = None,
+        api_key: str = None,
+        model: str = "Qwen3-4B"
     ):
-        self.client = OpenAI(base_url=base_url, api_key=api_key)
-        self.model = model
-        self.messages = [
-            {"role": "system", "content": SYSTEM_PROMPT}
-        ]
-        self.base_url = base_url
-        logger.info(f"Initialized SalesForecastAgent pointing to {base_url} with model {model}.")
+        self.base_url = base_url or os.environ.get("BASE_URL", "http://localhost:8000/v1")
+        self.api_key = api_key or os.environ.get("OPENAI_API_KEY", "abc-123")
+        self.model_name = model
+        self.history = None
         
+        # Setup the Agent
+        self._setup_agent()
+        logger.info(f"Initialized SalesForecastAgent pointing to {self.base_url} with model {self.model_name}.")
+
+    def _setup_agent(self):
+        """
+        Initializes the pydantic_ai Agent with OpenAIProvider model and registered tools.
+        """
+        provider = OpenAIProvider(
+            base_url=self.base_url,
+            api_key=self.api_key,
+        )
+        # Using OpenAIChatModel via provider
+        agent_model = OpenAIModel(self.model_name, provider=provider)
+        
+        # Import tools
+        from src.tools.summary_tool import summarize_sales
+        from src.tools.forecast_tool import forecast_sales
+        from src.tools.promotion_tool import analyze_promotion_impact
+        from src.tools.anomaly_tool import detect_anomalies
+        from src.tools.inventory_tool import inventory_recommendation
+        from src.tools.driver_analysis_tool import explain_forecast_drivers
+        from src.tools.elasticity_tool import estimate_price_elasticity
+
+        self.agent = Agent(
+            model=agent_model,
+            system_prompt=SYSTEM_PROMPT,
+            tools=[
+                summarize_sales,
+                forecast_sales,
+                analyze_promotion_impact,
+                detect_anomalies,
+                inventory_recommendation,
+                explain_forecast_drivers,
+                estimate_price_elasticity
+            ]
+        )
+
     def ask(self, question: str) -> str:
         """
-        Sends the user question to Qwen3, handles all requested tool calls, 
-        and prints the final business response.
+        Sends the user question to the agent, prints internal thinking steps,
+        handles tool calls, and returns the final business response.
         """
         print(f"\033[1;34m[User]:\033[0m {question}\n")
-        self.messages.append({"role": "user", "content": question})
         
         # Check if vLLM server is responsive
         server_online = True
         try:
-            # Short timeout check
             import httpx
+            # Query health or basic model listing
             httpx.get(f"{self.base_url.replace('/v1', '')}/health", timeout=1.0)
         except Exception:
             server_online = False
@@ -54,64 +94,35 @@ class SalesForecastAgent:
             return self._fallback_execution(question)
             
         try:
-            return self._run_agentic_loop()
-        except Exception as e:
-            logger.error("Error in agent loop, running offline fallback", exc_info=True)
-            print(f"\033[1;31m[Agent Error]:\033[0m Model call failed ({str(e)}). Running offline fallback...")
-            return self._fallback_execution(question)
-
-    def _run_agentic_loop(self) -> str:
-        """
-        Runs the standard OpenAI client tool-calling loop.
-        """
-        max_turns = 5
-        for turn in range(max_turns):
-            response = self.client.chat.completions.create(
-                model=self.model,
-                messages=self.messages,
-                tools=TOOL_SCHEMAS,
-                tool_choice="auto",
-                temperature=0.2
-            )
+            # Execute synchronously
+            result = self.agent.run_sync(question, message_history=self.history)
+            self.history = result.all_messages()
             
-            message = response.choices[0].message
+            # Print tool executions if any tool was called by the agent
+            for message in result.new_messages():
+                if hasattr(message, 'parts'):
+                    for part in message.parts:
+                        if part.__class__.__name__ == 'ToolCallPart' or hasattr(part, 'tool_name'):
+                            tool_name = part.tool_name
+                            tool_args = part.args
+                            
+                            # format args
+                            if isinstance(tool_args, dict):
+                                args_str = ', '.join(f'{k}={v}' for k, v in tool_args.items())
+                            else:
+                                args_str = str(tool_args)
+                                
+                            print(f"\033[1;32m[Agent thinking...]:\033[0m Requesting tool execution.")
+                            print(f"  |- \033[36mCalling tool:\033[0m {tool_name}({args_str})")
             
-            # If the model wants to call tools
-            if message.tool_calls:
-                # Add model message to history (required for OpenAI tool loop)
-                self.messages.append(message)
-                
-                print(f"\033[1;32m[Agent thinking...]:\033[0m Requesting {len(message.tool_calls)} tool execution(s).")
-                
-                for tool_call in message.tool_calls:
-                    tool_name = tool_call.function.name
-                    tool_args = json.loads(tool_call.function.arguments)
-                    
-                    print(f"  |- \033[36mCalling tool:\033[0m {tool_name}({', '.join(f'{k}={v}' for k, v in tool_args.items())})")
-                    
-                    # Execute tool
-                    tool_result_str = execute_tool(tool_name, tool_args)
-                    
-                    # Append result to messages
-                    self.messages.append({
-                        "role": "tool",
-                        "tool_call_id": tool_call.id,
-                        "name": tool_name,
-                        "content": tool_result_str
-                    })
-                
-                # Continue loop to send tool responses back to model
-                continue
-                
-            # If the model has completed and returned a text response
-            final_content = message.content
-            self.messages.append({"role": "assistant", "content": final_content})
-            
+            final_content = result.output
             print(f"\033[1;35m[Agent Response]:\033[0m\n{final_content}\n")
             return final_content
             
-        print("\033[1;31m[Agent Alert]:\033[0m Reached maximum execution turns without response.")
-        return "Reached maximum execution turns."
+        except Exception as e:
+            logger.error("Error in agent run_sync loop, running offline fallback", exc_info=True)
+            print(f"\033[1;31m[Agent Error]:\033[0m Model call failed ({str(e)}). Running offline fallback...")
+            return self._fallback_execution(question)
 
     def _fallback_execution(self, question: str) -> str:
         """
@@ -165,8 +176,6 @@ class SalesForecastAgent:
         response = self._format_manual_response(tool_name, result_dict, store, product)
         print(f"\033[1;35m[Agent Response]:\033[0m\n{response}\n")
         
-        # Save mock history
-        self.messages.append({"role": "assistant", "content": response})
         return response
 
     def _format_manual_response(self, tool_name: str, data: Dict[str, Any], store: str, product: str) -> str:
