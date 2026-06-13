@@ -21,7 +21,7 @@ def forecast_sales(
     product: str = None,
     store: str = None,
     horizon_weeks: int = 12,
-    data_path: str = "data/mock_sales.csv"
+    data_path: str = "/workspace/shared/sales-forecast-agent/data/mock_sales.csv"
 ) -> dict:
     """
     Fits a forecasting model on historical weekly sales data for a specific store

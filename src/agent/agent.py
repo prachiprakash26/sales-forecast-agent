@@ -14,6 +14,10 @@ from pydantic_ai.providers.openai import OpenAIProvider
 from src.agent.prompts import SYSTEM_PROMPT
 from src.agent.tool_registry import execute_tool
 
+import nest_asyncio
+nest_asyncio.apply()
+
+
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -102,7 +106,7 @@ class SalesForecastAgent:
             for message in result.new_messages():
                 if hasattr(message, 'parts'):
                     for part in message.parts:
-                        if part.__class__.__name__ == 'ToolCallPart' or hasattr(part, 'tool_name'):
+                        if getattr(part, 'part_kind', None) == 'tool-call':
                             tool_name = part.tool_name
                             tool_args = part.args
                             
