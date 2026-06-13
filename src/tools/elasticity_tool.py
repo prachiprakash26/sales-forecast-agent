@@ -21,9 +21,9 @@ def estimate_price_elasticity(product: str = None, store: str = None) -> dict:
     
     # Filter dataset
     filtered_df = df.copy()
-    if store is not None:
+    if store is not None and store != "":
         filtered_df = filtered_df[filtered_df['store'] == store]
-    if product is not None:
+    if product is not None and product != "":
         filtered_df = filtered_df[filtered_df['product'] == product]
         
     if filtered_df.empty:

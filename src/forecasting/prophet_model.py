@@ -33,16 +33,21 @@ def forecast_sales(
         - "forecast_summary": str narrative summary of the model results.
     """
     if not os.path.exists(data_path):
-        raise FileNotFoundError(f"Data file not found at {data_path}. Please generate mock data first.")
+        from src.utils.helpers import get_data_path
+        resolved_path = get_data_path("mock_sales.csv")
+        if os.path.exists(resolved_path):
+            data_path = resolved_path
+        else:
+            raise FileNotFoundError(f"Data file not found at {data_path} or {resolved_path}. Please generate mock data first.")
         
     df = pd.read_csv(data_path)
     df['date'] = pd.to_datetime(df['date'])
     
     # Filter data based on parameters
     filtered_df = df.copy()
-    if store is not None:
+    if store is not None and store != "":
         filtered_df = filtered_df[filtered_df['store'] == store]
-    if product is not None:
+    if product is not None and product != "":
         filtered_df = filtered_df[filtered_df['product'] == product]
         
     if filtered_df.empty:
